@@ -1,0 +1,21 @@
+{
+  "app_id": "app-251117-yokosuka-20240206",
+  "name": "星屑の横スクロールアクション",
+  "version": "1.0.0",
+  "path": "./251117_yokosukugame.html",
+  "description": "HTMLとJSで作られた横スクロールアクションゲームのデモ。",
+  "icons": [
+    {
+      "src": "icons/icon.svg",
+      "type": "image/svg+xml"
+    }
+  ],
+  "os_context": {
+    "display": "fullscreen",
+    "theme": "dark"
+  },
+  "color_pallet": {
+    "primary": "#187347",
+    "secondary": "#a0a81d"
+  }
+}
