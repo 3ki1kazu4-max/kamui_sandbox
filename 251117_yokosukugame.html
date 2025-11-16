@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>星舟ボルトライダー</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: "Hiragino Sans", "Segoe UI", system-ui, sans-serif;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        background: radial-gradient(circle at top, #040610, #08020b 55%, #050104);
+        color: #f4f6ff;
+        gap: 1.25rem;
+      }
+      h1 {
+        margin: 1.5rem 0 0.25rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .panel {
+        text-align: center;
+        width: min(980px, 92vw);
+      }
+      .instructions {
+        margin: 0;
+        color: #c9d3ff;
+      }
+      #stage {
+        position: relative;
+      }
+      canvas {
+        border-radius: 22px;
+        border: 3px solid rgba(255, 255, 255, 0.2);
+        box-shadow: 0 25px 60px rgba(0, 0, 0, 0.65);
+        background: linear-gradient(#02050b, #050d25 50%, #150902 50%, #2f1504);
+      }
+      .hud {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        justify-content: space-between;
+        padding: 0.65rem 1rem;
+        pointer-events: none;
+        font-weight: 600;
+        text-shadow: 0 0 12px rgba(0, 0, 0, 0.6);
+      }
+      #message {
+        position: absolute;
+        top: 60%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        padding: 0.9rem 1.6rem;
+        border-radius: 18px;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        background: rgba(3, 6, 16, 0.8);
+        letter-spacing: 0.08em;
+        font-weight: 700;
+        pointer-events: none;
+        text-align: center;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+      }
+      button {
+        border: none;
+        border-radius: 999px;
+        padding: 0.8rem 1.6rem;
+        font-size: 1rem;
+        font-weight: 700;
+        color: #021018;
+        background: linear-gradient(120deg, #ffdf31, #ff8a23);
+        box-shadow: 0 15px 30px rgba(0, 0, 0, 0.45);
+        cursor: pointer;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+      }
+      button:active {
+        transform: translateY(2px);
+        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.5);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="panel">
+      <h1>星舟ボルトライダー</h1>
+      <p class="instructions">
+        ← → or A D：移動 ／ Space：ジャンプ ／ Shift：ブースト ／ R：やり直し
+      </p>
+    </div>
+    <div id="stage">
+      <canvas id="game" width="960" height="420"></canvas>
+      <div class="hud">
+        <div id="score">DIST 0m ｜ SHARDS 0/8 ｜ ENERGY 100%</div>
+        <div id="status">READY</div>
+      </div>
+      <div id="message">Spaceでスタート</div>
+    </div>
+    <button id="restart">リスタート</button>
+    <script>
+      const canvas = document.getElementById("game");
+      const ctx = canvas.getContext("2d");
+      const scoreEl = document.getElementById("score");
+      const statusEl = document.getElementById("status");
+      const messageEl = document.getElementById("message");
+      const restartBtn = document.getElementById("restart");
+
+      const keys = new Set();
+      const world = {
+        width: 5200,
+        ground: 340,
+        gravity: 2200,
+      };
+
+      const player = {
+        w: 36,
+        h: 48,
+        x: 120,
+        y: world.ground - 48,
+        vx: 0,
+        vy: 0,
+        facing: 1,
+        onGround: true,
+        boostTimer: 0,
+        energy: 100,
+        hasDoubleJump: true,
+      };
+
+      const state = {
+        camera: 0,
+        mode: "ready",
+        dist: 0,
+        shards: 0,
+        bestDist: 0,
+        time: 0,
+      };
+
+      const config = {
+        accel: 2400,
+        drag: 10,
+        maxSpeed: 340,
+        boostSpeed: 660,
+        jump: 840,
+        doubleJump: 760,
+        boostCost: 25,
+      };
+
+      const platforms = [
+        { x: -300, y: world.ground, w: world.width + 600, h: 120 },
+        { x: 420, y: 270, w: 140, h: 14 },
+        { x: 840, y: 250, w: 160, h: 14 },
+        { x: 1220, y: 220, w: 220, h: 14 },
+        { x: 1700, y: 260, w: 180, h: 14 },
+        { x: 2040, y: 230, w: 220, h: 14 },
+        { x: 2440, y: 210, w: 160, h: 14 },
+        { x: 2760, y: 260, w: 220, h: 14 },
+        { x: 3280, y: 230, w: 180, h: 14 },
+        { x: 3700, y: 210, w: 240, h: 14 },
+        { x: 4160, y: 250, w: 160, h: 14 },
+        { x: 4560, y: 230, w: 220, h: 14 },
+      ];
+
+      const hazards = [
+        { x: 600, y: world.ground - 32, w: 48, h: 32 },
+        { x: 940, y: world.ground - 34, w: 60, h: 34 },
+        { x: 1500, y: world.ground - 40, w: 70, h: 40 },
+        { x: 2100, y: world.ground - 30, w: 45, h: 30 },
+        { x: 2670, y: world.ground - 34, w: 80, h: 34 },
+        { x: 3140, y: world.ground - 34, w: 60, h: 34 },
+        { x: 3580, y: world.ground - 38, w: 65, h: 38 },
+        { x: 3980, y: world.ground - 34, w: 80, h: 34 },
+        { x: 4400, y: world.ground - 32, w: 50, h: 32 },
+      ];
+
+      const drones = [
+        { baseX: 760, baseY: 210, range: 160, speed: 1.4, angle: 0 },
+        { baseX: 1320, baseY: 180, range: 120, speed: 1.8, angle: Math.PI / 3 },
+        { baseX: 2380, baseY: 160, range: 190, speed: 1.3, angle: Math.PI / 2 },
+        { baseX: 3120, baseY: 190, range: 140, speed: 1.6, angle: Math.PI },
+        { baseX: 3820, baseY: 160, range: 180, speed: 1.5, angle: Math.PI / 5 },
+        { baseX: 4500, baseY: 170, range: 170, speed: 1.9, angle: Math.PI / 4 },
+      ];
+
+      const shards = [
+        { x: 380, y: 220, collected: false },
+        { x: 820, y: 200, collected: false },
+        { x: 1480, y: 160, collected: false },
+        { x: 1840, y: 200, collected: false },
+        { x: 2480, y: 180, collected: false },
+        { x: 3000, y: 170, collected: false },
+        { x: 3600, y: 160, collected: false },
+        { x: 4400, y: 180, collected: false },
+      ];
+
+      const goal = { x: world.width - 200, y: world.ground - 120, w: 160, h: 140 };
+
+      const starsFar = Array.from({ length: 90 }, (_, i) => ({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height * 0.7,
+        size: Math.random() * 2 + 0.5,
+        drift: 0.12 + Math.random() * 0.2,
+      }));
+
+      let last = 0;
+
+      function rectsOverlap(a, b) {
+        return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+      }
+
+      function resetGame() {
+        player.x = 120;
+        player.y = world.ground - player.h;
+        player.vx = 0;
+        player.vy = 0;
+        player.facing = 1;
+        player.onGround = true;
+        player.boostTimer = 0;
+        player.energy = 100;
+        player.hasDoubleJump = true;
+        state.camera = 0;
+        state.mode = "ready";
+        state.dist = 0;
+        state.shards = 0;
+        state.time = 0;
+        shards.forEach((s) => (s.collected = false));
+        statusEl.textContent = "READY";
+        messageEl.hidden = false;
+        messageEl.textContent = "Spaceでスタート";
+        updateScore();
+      }
+
+      function updateScore() {
+        scoreEl.textContent = `DIST ${state.dist}m ｜ SHARDS ${state.shards}/${shards.length} ｜ ENERGY ${Math.round(
+          player.energy
+        )}%`;
+      }
+
+      function startGame() {
+        if (state.mode === "ready" || state.mode === "gameover" || state.mode === "clear") {
+          state.mode = "playing";
+          statusEl.textContent = "FLIGHT";
+          messageEl.hidden = true;
+        }
+      }
+
+      function endGame(msg) {
+        if (state.mode !== "playing") return;
+        state.mode = "gameover";
+        statusEl.textContent = "DOWN";
+        messageEl.textContent = `${msg} ／ Rでやり直し`;
+        messageEl.hidden = false;
+      }
+
+      function reachGoal() {
+        state.mode = "clear";
+        statusEl.textContent = "CLEAR";
+        messageEl.textContent = state.shards === shards.length ? "すべてのシャード回収！" : "ゴール到達！";
+        messageEl.hidden = false;
+      }
+
+      function updatePlayer(dt) {
+        const moveLeft = keys.has("ArrowLeft") || keys.has("a") || keys.has("A");
+        const moveRight = keys.has("ArrowRight") || keys.has("d") || keys.has("D");
+        if (moveRight) {
+          player.vx += config.accel * dt;
+          player.facing = 1;
+        } else if (moveLeft) {
+          player.vx -= config.accel * dt;
+          player.facing = -1;
+        } else {
+          player.vx -= player.vx * config.drag * dt;
+        }
+        player.vx = Math.max(-config.maxSpeed, Math.min(config.maxSpeed, player.vx));
+
+        const wantsJump = keys.has(" ") || keys.has("Space");
+        if (wantsJump && player.onGround) {
+          player.vy = -config.jump;
+          player.onGround = false;
+          keys.delete(" ");
+          keys.delete("Space");
+          player.hasDoubleJump = true;
+        } else if (wantsJump && player.hasDoubleJump) {
+          player.vy = -config.doubleJump;
+          player.hasDoubleJump = false;
+          keys.delete(" ");
+          keys.delete("Space");
+        }
+
+        const boosting = keys.has("Shift") || keys.has("ShiftLeft") || keys.has("ShiftRight");
+        if (boosting && player.energy >= config.boostCost * dt) {
+          player.energy = Math.max(0, player.energy - config.boostCost * dt * 10);
+          player.boostTimer = 0.2;
+        }
+
+        if (player.boostTimer > 0) {
+          player.boostTimer -= dt;
+          player.vx += player.facing * config.boostSpeed * dt;
+          player.vx = Math.max(-config.boostSpeed, Math.min(config.boostSpeed, player.vx));
+        } else if (!boosting) {
+          player.energy = Math.min(100, player.energy + dt * 12);
+        }
+
+        player.x += player.vx * dt;
+        player.x = Math.max(-120, Math.min(world.width - player.w, player.x));
+
+        player.vy += world.gravity * dt;
+        player.y += player.vy * dt;
+        player.onGround = false;
+
+        platforms.forEach((platform) => {
+          if (!rectsOverlap(player, platform)) return;
+          if (player.vy > 0) {
+            player.y = platform.y - player.h;
+            player.vy = 0;
+            player.onGround = true;
+          } else if (player.vy < 0) {
+            player.y = platform.y + platform.h;
+            player.vy = 0;
+          } else {
+            if (player.vx > 0) player.x = platform.x - player.w;
+            else if (player.vx < 0) player.x = platform.x + platform.w;
+            player.vx = 0;
+          }
+        });
+
+        if (player.y > canvas.height + 200) {
+          endGame("墜落…");
+        }
+      }
+
+      function updateWorld(dt) {
+        state.time += dt;
+        drones.forEach((drone) => {
+          drone.angle += dt * drone.speed;
+          drone.x = drone.baseX + Math.sin(drone.angle) * drone.range;
+          drone.y = drone.baseY + Math.cos(drone.angle * 1.3) * 26;
+        });
+
+        hazards.forEach((h) => {
+          if (rectsOverlap(player, h)) {
+            endGame("地雷に接触");
+          }
+        });
+
+        drones.forEach((drone) => {
+          const box = { x: drone.x - 18, y: drone.y - 18, w: 36, h: 36 };
+          if (rectsOverlap(player, box)) {
+            endGame("ドローン被弾");
+          }
+        });
+
+        shards.forEach((shard) => {
+          if (shard.collected) return;
+          const box = { x: shard.x - 14, y: shard.y - 14, w: 28, h: 28 };
+          if (rectsOverlap(player, box)) {
+            shard.collected = true;
+            state.shards += 1;
+          }
+        });
+
+        if (rectsOverlap(player, goal)) {
+          reachGoal();
+        }
+
+        state.camera = Math.max(0, Math.min(player.x - canvas.width / 3, world.width - canvas.width));
+        state.dist = Math.max(state.dist, Math.floor(player.x / 8));
+        state.bestDist = Math.max(state.bestDist, state.dist);
+        updateScore();
+      }
+
+      function drawBackground() {
+        const skyGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+        skyGrad.addColorStop(0, "#01030a");
+        skyGrad.addColorStop(0.55, "#061634");
+        skyGrad.addColorStop(1, "#1c0b03");
+        ctx.fillStyle = skyGrad;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        starsFar.forEach((star, i) => {
+          const x = (star.x - state.camera * star.drift) % canvas.width;
+          const y = star.y;
+          ctx.fillStyle = i % 5 === 0 ? "rgba(255,205,110,0.85)" : "rgba(150,195,255,0.8)";
+          ctx.fillRect((x + canvas.width) % canvas.width, y, star.size, star.size);
+        });
+
+        ctx.fillStyle = "#081224";
+        ctx.beginPath();
+        ctx.moveTo(0, 220);
+        for (let i = 0; i <= canvas.width; i += 80) {
+          const px = i + state.camera * 0.08;
+          const py = 230 + Math.sin(px * 0.01) * 25;
+          ctx.lineTo(i, py);
+        }
+        ctx.lineTo(canvas.width, 0);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = "#130702";
+        ctx.fillRect(0, world.ground + 70, canvas.width, canvas.height);
+      }
+
+      function drawPlatforms() {
+        ctx.fillStyle = "#2b1505";
+        platforms.forEach((p) => {
+          const x = p.x - state.camera;
+          if (x + p.w < -10 || x > canvas.width + 10) return;
+          ctx.fillRect(x, p.y, p.w, p.h);
+          ctx.fillStyle = "#51290e";
+          ctx.fillRect(x, p.y, p.w, 6);
+          ctx.fillStyle = "#2b1505";
+        });
+      }
+
+      function drawHazards() {
+        hazards.forEach((h) => {
+          const x = h.x - state.camera;
+          if (x + h.w < -10 || x > canvas.width + 10) return;
+          const pulse = 0.75 + Math.sin(state.time * 6 + x) * 0.25;
+          ctx.fillStyle = `rgba(255,85,70,${0.6 + pulse * 0.3})`;
+          ctx.beginPath();
+          ctx.moveTo(x, h.y + h.h);
+          ctx.lineTo(x + h.w / 2, h.y);
+          ctx.lineTo(x + h.w, h.y + h.h);
+          ctx.closePath();
+          ctx.fill();
+        });
+      }
+
+      function drawDrones() {
+        drones.forEach((d) => {
+          const x = d.x - state.camera;
+          if (x < -40 || x > canvas.width + 40) return;
+          ctx.save();
+          ctx.translate(x, d.y);
+          ctx.rotate(Math.sin(d.angle) * 0.2);
+          ctx.fillStyle = "#4d74ff";
+          ctx.fillRect(-16, -8, 32, 16);
+          ctx.fillStyle = "#0a0f24";
+          ctx.fillRect(-16, -8, 32, 6);
+          ctx.fillStyle = "rgba(99,174,255,0.45)";
+          ctx.beginPath();
+          ctx.ellipse(0, 10, 18, 4, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        });
+      }
+
+      function drawShards() {
+        shards.forEach((s) => {
+          if (s.collected) return;
+          const x = s.x - state.camera;
+          if (x < -20 || x > canvas.width + 20) return;
+          ctx.save();
+          ctx.translate(x, s.y);
+          ctx.rotate(((state.time * 2 + s.x) % (Math.PI * 2)));
+          ctx.fillStyle = "#72f6ff";
+          ctx.beginPath();
+          ctx.moveTo(0, -16);
+          ctx.lineTo(10, 0);
+          ctx.lineTo(0, 16);
+          ctx.lineTo(-10, 0);
+          ctx.closePath();
+          ctx.fill();
+          ctx.restore();
+        });
+      }
+
+      function drawGoal() {
+        const x = goal.x - state.camera;
+        ctx.fillStyle = "rgba(58,132,255,0.8)";
+        ctx.fillRect(x, goal.y, goal.w, goal.h);
+        ctx.fillStyle = "rgba(169,209,255,0.9)";
+        ctx.fillRect(x + 12, goal.y + 12, goal.w - 24, goal.h - 24);
+        ctx.strokeStyle = "rgba(255,255,255,0.4)";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, goal.y, goal.w, goal.h);
+      }
+
+      function drawPlayer() {
+        const px = player.x - state.camera;
+        const py = player.y;
+        ctx.save();
+        ctx.translate(px + player.w / 2, py + player.h / 2);
+        ctx.rotate((player.vx / config.maxSpeed) * 0.2);
+        ctx.fillStyle = "#7affd0";
+        ctx.fillRect(-player.w / 2, -player.h / 2, player.w, player.h);
+        ctx.fillStyle = "#0e2032";
+        ctx.fillRect(-player.w / 2, -player.h / 2, player.w, 14);
+        ctx.fillStyle = "rgba(122,255,208,0.45)";
+        ctx.fillRect(-player.w / 2, player.h / 2 - 6, player.w, 6);
+        ctx.restore();
+
+        ctx.fillStyle = "rgba(99,248,255,0.3)";
+        ctx.beginPath();
+        ctx.ellipse(px + player.w / 2, py + player.h, 18, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      function loop(timestamp) {
+        if (!last) last = timestamp;
+        const dt = Math.min(0.05, (timestamp - last) / 1000);
+        last = timestamp;
+
+        if (state.mode === "playing") {
+          updatePlayer(dt);
+          updateWorld(dt);
+        }
+
+        drawBackground();
+        drawPlatforms();
+        drawHazards();
+        drawDrones();
+        drawShards();
+        drawGoal();
+        drawPlayer();
+
+        requestAnimationFrame(loop);
+      }
+
+      document.addEventListener("keydown", (event) => {
+        if (event.repeat) return;
+        keys.add(event.key);
+        if (event.key === " " || event.key === "Space") {
+          startGame();
+        }
+        if (event.key.toLowerCase() === "r") {
+          resetGame();
+        }
+      });
+
+      document.addEventListener("keyup", (event) => {
+        keys.delete(event.key);
+      });
+
+      restartBtn.addEventListener("click", resetGame);
+      resetGame();
+      requestAnimationFrame(loop);
+    </script>
+  </body>
+</html>
