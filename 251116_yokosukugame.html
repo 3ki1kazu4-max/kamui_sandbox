@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>横スクロールアクションゲーム</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: "Segoe UI", "Hiragino Sans", sans-serif;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 1rem;
+      background: radial-gradient(circle at top, #101828 0%, #05070d 55%, #010203 100%);
+      color: #f3f6ff;
+    }
+    h1 {
+      margin: 1rem 0 0.25rem;
+      letter-spacing: 0.08em;
+    }
+    .panel {
+      text-align: center;
+      width: min(960px, 92vw);
+    }
+    .instructions {
+      margin-top: 0;
+      font-size: 0.95rem;
+      color: #c8d4ff;
+    }
+    #game-wrapper {
+      position: relative;
+    }
+    canvas {
+      border: 3px solid rgba(255, 255, 255, 0.2);
+      border-radius: 18px;
+      background: linear-gradient(#07122a, #070d1d 55%, #1c1410 55%, #332014 100%);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+    }
+    .hud {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      display: flex;
+      justify-content: space-between;
+      padding: 0.75rem 1rem;
+      font-weight: 600;
+      text-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
+    }
+    button {
+      padding: 0.65rem 1.4rem;
+      font-size: 1rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 999px;
+      color: #05070d;
+      background: linear-gradient(120deg, #f4d03f, #f39c12);
+      cursor: pointer;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+      box-shadow: 0 12px 24px rgba(0,0,0,.35);
+    }
+    button:active {
+      transform: translateY(2px);
+      box-shadow: 0 6px 14px rgba(0,0,0,.5);
+    }
+    .floating-message {
+      position: absolute;
+      top: 60%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      padding: 0.8rem 1.4rem;
+      border-radius: 14px;
+      background: rgba(0,0,0,0.55);
+      backdrop-filter: blur(6px);
+      font-weight: 700;
+      color: #f8fafb;
+      box-shadow: 0 0 30px rgba(0,0,0,0.35);
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <h1>星屑の横スクロールアクション</h1>
+    <p class="instructions">← →：移動 ／ Space：ジャンプ ／ Shift：ダッシュ（クールダウンあり） ／ R：即リスタート</p>
+  </div>
+
+  <div id="game-wrapper">
+    <canvas id="game" width="960" height="420"></canvas>
+    <div class="hud">
+      <div id="score">SCORE: 0</div>
+      <div id="status">READY</div>
+    </div>
+    <div id="message" class="floating-message" hidden>PRESS SPACE TO START</div>
+  </div>
+
+  <button id="restart">リスタート</button>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const statusEl = document.getElementById('status');
+    const messageEl = document.getElementById('message');
+    const restartBtn = document.getElementById('restart');
+
+    const keys = new Set();
+    const config = {
+      gravity: 2000,
+      ground: canvas.height - 60,
+      maxSpeed: 420,
+      dashSpeed: 960,
+      dashDuration: 0.2,
+      dashCooldown: 1.5
+    };
+
+    const player = {
+      x: 140,
+      y: config.ground,
+      width: 46,
+      height: 60,
+      vy: 0,
+      vx: 0,
+      grounded: true,
+      alive: true,
+      dashTimer: 0,
+      dashCooldownTimer: 0,
+    };
+
+    let lastTime = performance.now();
+    let score = 0;
+    let obstacles = [];
+    let particles = [];
+    let stars = []; // background speed dots
+    let gameStarted = false;
+    let parallax = { near: 0, mid: 0, far: 0 };
+
+    function resetGame() {
+      player.x = 140;
+      player.y = config.ground;
+      player.vy = 0;
+      player.vx = 0;
+      player.grounded = true;
+      player.alive = true;
+      player.dashTimer = 0;
+      player.dashCooldownTimer = 0;
+      score = 0;
+      obstacles = [];
+      particles = [];
+      stars = createStars();
+      parallax = { near: 0, mid: 0, far: 0 };
+      gameStarted = false;
+      messageEl.hidden = false;
+      messageEl.textContent = 'PRESS SPACE TO START';
+      statusEl.textContent = 'READY';
+    }
+
+    function createStars() {
+      const arr = [];
+      for (let i = 0; i < 120; i++) {
+        arr.push({ x: Math.random() * canvas.width, y: Math.random() * canvas.height, speed: 20 + Math.random() * 60 });
+      }
+      return arr;
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (['ArrowLeft','ArrowRight','Space','ShiftLeft','ShiftRight','KeyR'].includes(e.code)) {
+        e.preventDefault();
+      }
+      keys.add(e.code);
+      if ((e.code === 'Space' || e.code === 'ArrowUp') && player.grounded && player.alive) {
+        player.vy = -720;
+        player.grounded = false;
+        gameStarted = true;
+        messageEl.hidden = true;
+      }
+      if (e.code === 'KeyR') {
+        resetGame();
+      }
+    });
+
+    document.addEventListener('keyup', (e) => {
+      keys.delete(e.code);
+    });
+
+    restartBtn.addEventListener('click', () => resetGame());
+
+    function spawnObstacle() {
+      const height = 30 + Math.random() * 100;
+      const width = 30 + Math.random() * 70;
+      obstacles.push({
+        x: canvas.width + Math.random() * 200,
+        y: config.ground - height + height,
+        width,
+        height,
+        speed: 260 + Math.min(score * 0.2, 240),
+        color: `hsl(${Math.random() * 40 + 10}, 70%, 55%)`
+      });
+    }
+
+    let obstacleTimer = 0;
+    const obstacleDelay = () => Math.max(0.8 - score / 2500, 0.35);
+
+    function update(dt) {
+      if (!player.alive || !gameStarted) return;
+
+      score += dt * 60;
+      scoreEl.textContent = 'SCORE: ' + Math.floor(score).toString();
+
+      // star background
+      stars.forEach((star) => {
+        star.x -= star.speed * dt;
+        if (star.x < 0) star.x = canvas.width;
+      });
+
+      // parallax scroll tied to score
+      parallax.far -= 20 * dt;
+      parallax.mid -= 60 * dt;
+      parallax.near -= player.vx * dt * 0.6 + 140 * dt;
+
+      const acceleration = 1600;
+      if (keys.has('ArrowRight')) {
+        player.vx = Math.min(player.vx + acceleration * dt, config.maxSpeed);
+      } else if (keys.has('ArrowLeft')) {
+        player.vx = Math.max(player.vx - acceleration * dt, -config.maxSpeed * 0.6);
+      } else {
+        player.vx *= 0.9;
+      }
+
+      // dash
+      if ((keys.has('ShiftLeft') || keys.has('ShiftRight')) && player.dashCooldownTimer <= 0 && player.dashTimer <= 0) {
+        player.dashTimer = config.dashDuration;
+        player.dashCooldownTimer = config.dashCooldown;
+        statusEl.textContent = 'DASH!';
+      }
+
+      if (player.dashTimer > 0) {
+        player.dashTimer -= dt;
+        player.vx = Math.sign(player.vx || 1) * config.dashSpeed;
+        particles.push({ x: player.x, y: player.y + player.height / 2, life: 0.2 });
+      } else if (player.dashCooldownTimer > 0) {
+        player.dashCooldownTimer -= dt;
+        if (player.dashCooldownTimer <= 0) {
+          statusEl.textContent = 'READY';
+        }
+      }
+
+      player.x += player.vx * dt;
+      player.x = Math.max(60, Math.min(canvas.width - 120, player.x));
+
+      player.vy += config.gravity * dt;
+      player.y += player.vy * dt * 0.7;
+
+      if (player.y >= config.ground) {
+        player.y = config.ground;
+        player.vy = 0;
+        player.grounded = true;
+      } else {
+        player.grounded = false;
+      }
+
+      obstacleTimer -= dt;
+      if (obstacleTimer <= 0) {
+        spawnObstacle();
+        obstacleTimer = obstacleDelay();
+      }
+
+      obstacles.forEach((obs) => {
+        obs.x -= (obs.speed + score * 0.05) * dt;
+      });
+      obstacles = obstacles.filter((obs) => obs.x + obs.width > -20);
+
+      particles.forEach((p) => {
+        p.life -= dt;
+        p.x -= 400 * dt;
+      });
+      particles = particles.filter((p) => p.life > 0);
+
+      for (const obs of obstacles) {
+        if (rectOverlap(player, obs)) {
+          player.alive = false;
+          statusEl.textContent = 'GAME OVER';
+          messageEl.hidden = false;
+          messageEl.textContent = 'Rキーで再挑戦';
+          break;
+        }
+      }
+    }
+
+    function rectOverlap(a, b) {
+      return a.x < b.x + b.width && a.x + a.width > b.x && a.y - a.height < b.y && a.y > b.y - b.height;
+    }
+
+    function drawBackground() {
+      ctx.save();
+      ctx.fillStyle = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      ctx.fillStyle.addColorStop?.call(ctx.fillStyle, 0, '#030918');
+      ctx.fillStyle.addColorStop?.call(ctx.fillStyle, 0.5, '#051332');
+      ctx.fillStyle.addColorStop?.call(ctx.fillStyle, 1, '#130c07');
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.restore();
+    }
+
+    function drawParallax() {
+      ctx.save();
+      ctx.fillStyle = '#08152f';
+      for (let i = 0; i < 3; i++) {
+        const offset = (parallax.far + i * 200) % canvas.width;
+        ctx.beginPath();
+        ctx.moveTo(offset, 180);
+        ctx.lineTo(offset + 200, 80);
+        ctx.lineTo(offset + 400, 180);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.fillStyle = '#0c1f45';
+      for (let i = 0; i < 3; i++) {
+        const offset = (parallax.mid + i * 320) % canvas.width;
+        ctx.beginPath();
+        ctx.moveTo(offset, 240);
+        ctx.lineTo(offset + 260, 150);
+        ctx.lineTo(offset + 520, 240);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.fillStyle = 'rgba(40,25,18,0.9)';
+      for (let i = 0; i < 3; i++) {
+        const offset = (parallax.near + i * 220) % canvas.width;
+        ctx.fillRect(offset, canvas.height - 80, 240, 80);
+      }
+      ctx.restore();
+    }
+
+    function drawGround() {
+      ctx.save();
+      ctx.fillStyle = '#3a2415';
+      ctx.fillRect(0, config.ground, canvas.width, 80);
+      ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+      ctx.beginPath();
+      for (let x = (parallax.near % 60); x < canvas.width; x += 60) {
+        ctx.moveTo(x, config.ground);
+        ctx.lineTo(x - 10, config.ground + 40);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawPlayer() {
+      ctx.save();
+      ctx.translate(player.x, player.y - player.height);
+      ctx.fillStyle = player.alive ? '#61e8f7' : '#f26464';
+      ctx.fillRect(-player.width / 2, 0, player.width, player.height);
+      ctx.fillStyle = '#1b2b44';
+      ctx.fillRect(-player.width / 2, 10, player.width, 12);
+      ctx.restore();
+    }
+
+    function drawObstacles() {
+      obstacles.forEach((obs) => {
+        ctx.save();
+        ctx.fillStyle = obs.color;
+        ctx.fillRect(obs.x, obs.y - obs.height, obs.width, obs.height);
+        ctx.restore();
+      });
+    }
+
+    function drawParticles() {
+      particles.forEach((p) => {
+        ctx.save();
+        ctx.globalAlpha = p.life * 4;
+        ctx.fillStyle = '#a5f2ff';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      });
+    }
+
+    function drawStars() {
+      ctx.save();
+      ctx.fillStyle = '#d6f1ff';
+      stars.forEach((star) => {
+        ctx.globalAlpha = Math.random() * 0.4 + 0.2;
+        ctx.fillRect(star.x, star.y, 2, 2);
+      });
+      ctx.restore();
+    }
+
+    function render() {
+      drawBackground();
+      drawStars();
+      drawParallax();
+      drawGround();
+      drawObstacles();
+      drawParticles();
+      drawPlayer();
+    }
+
+    function loop(timestamp) {
+      const dt = Math.min(0.033, (timestamp - lastTime) / 1000);
+      lastTime = timestamp;
+      update(dt);
+      render();
+      requestAnimationFrame(loop);
+    }
+
+    resetGame();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
